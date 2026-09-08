@@ -112,16 +112,27 @@ export type SearchCrawlerUserData = {
     /** Max pages: ceil(maxResults/10) + 1 to handle pages with <10 results */
     totalPages: number;
     actorRequestId?: string;
+    /**
+     * Whether a charge for this query has already been sent, so that neither a retry of the search
+     * request handler nor a further result page sends another one. It records the attempt rather than a
+     * confirmed charge: a charge that times out may still have been recorded by the platform.
+     */
+    isSearchChargeAttempted: boolean;
 };
 
 /**
  * Type for createSearchRequest function parameters.
- * Makes pagination fields optional while keeping required fields mandatory.
+ * Makes pagination and charging fields optional while keeping required fields mandatory.
  */
-export type CreateSearchRequestUserData = Optional<SearchCrawlerUserData, 'timeMeasures' | 'collectedResults' | 'currentPage' | 'totalPages'>;
+export type CreateSearchRequestUserData = Optional<
+    SearchCrawlerUserData,
+    'timeMeasures' | 'collectedResults' | 'currentPage' | 'totalPages' | 'isSearchChargeAttempted'
+>;
 
 export type ContentCrawlerUserData = {
     query: string;
+    /** As {@link SearchCrawlerUserData.isSearchChargeAttempted}, for one fetched page. */
+    isFetchChargeAttempted?: boolean;
     responseId: string;
     timeMeasures: TimeMeasure[];
     searchResult?: OrganicResult;

@@ -173,6 +173,7 @@ export function createSearchRequest(
             currentPage,
             totalPages,
             actorRequestId: userData.actorRequestId,
+            isSearchChargeAttempted: userData.isSearchChargeAttempted ?? false,
         },
     };
 }

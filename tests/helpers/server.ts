@@ -38,6 +38,28 @@ export function createTestServer(): express.Express {
         sendHtml('with-image.html', res);
     });
 
+    // A minimal stand-in for a Google result page, holding a single organic result that points back
+    // at this server, so that the search crawler can be exercised without reaching Google.
+    app.get('/serp', (req, res) => {
+        res.send(`<html><body><div class="MjjYud">
+            <a href="http://${req.headers.host}/basic"><h3>Test Page</h3></a>
+        </div></body></html>`);
+    });
+
+    // What Google serves when it refuses the query: parses fine, holds no results.
+    app.get('/serp-empty', (_req, res) => {
+        res.send('<html><body><h1>unusual traffic</h1></body></html>');
+    });
+
+    app.get('/serp-error', (_req, res) => {
+        res.status(500).send('nope');
+    });
+
+    // Has no media file extension, so it is not skipped - the crawler rejects its content type instead.
+    app.get('/binary', (_req, res) => {
+        res.type('application/octet-stream').send(Buffer.from([0x00, 0x01, 0x02]));
+    });
+
     app.get('/image.png', (_req, res) => {
         imageRequestCount++;
         // A 1x1 transparent PNG

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { ImpitHttpClient } from '@crawlee/impit-client';
 import { MemoryStorage } from '@crawlee/memory-storage';
 import { PlaywrightBlocker } from '@ghostery/adblocker-playwright';
-import { Actor, RequestQueue } from 'apify';
+import { RequestQueue } from 'apify';
 import {
     type CheerioAPI,
     CheerioCrawler,
@@ -13,16 +13,17 @@ import {
     PlaywrightCrawler,
     type PlaywrightCrawlerOptions,
     type PlaywrightCrawlingContext,
+    type Request,
     type RequestOptions,
 } from 'crawlee';
 
+import { chargeFetch, chargeSearch } from './charging.js';
 import { ContentCrawlerTypes, GOOGLE_STANDARD_RESULTS_PER_PAGE } from './const.js';
 import { deduplicateResults, scrapeOrganicResults } from './google-search/google-extractors-urls.js';
-import { getMiniActor } from './mini-actors.js';
 import { failedRequestHandler, requestHandlerCheerio, requestHandlerPlaywright } from './request-handler.js';
-import { addEmptyResultToResponse, sendResponseError, sendResponseIfFinished } from './responses.js';
-import type { ContentCrawlerOptions, ContentCrawlerUserData, SearchCrawlerUserData } from './types.js';
-import { addTimeMeasureEvent, createRequest, createSearchRequest, isActorStandby, randomId } from './utils.js';
+import { addEmptyResultToResponse, addResultToResponse, sendResponseError, sendResponseIfFinished } from './responses.js';
+import type { ContentCrawlerOptions, ContentCrawlerUserData, Output, SearchCrawlerUserData } from './types.js';
+import { addTimeMeasureEvent, createRequest, createSearchRequest } from './utils.js';
 
 const crawlers = new Map<string, CheerioCrawler | PlaywrightCrawler>();
 const client = new MemoryStorage({ persistStorage: false });
@@ -108,6 +109,15 @@ export async function createAndStartSearchCrawler(
 
             // Destructure userData for easier access (pagination fields are initialized in createSearchRequest)
             const { collectedResults, currentPage, totalPages, maxResults, actorRequestId } = request.userData;
+
+            // Charged for a page of results rather than for submitting the query, so a search Google
+            // refuses stays free - but before anything is enqueued, or the response could beat the charge
+            // and invalidate the caller's request ID. The flag rides along with the request, so a retry
+            // of this handler cannot charge the query twice.
+            if (organicResults.length > 0 && !request.userData.isSearchChargeAttempted) {
+                request.userData.isSearchChargeAttempted = true;
+                await chargeSearch({ actorRequestId, idempotencyKey: request.uniqueKey });
+            }
 
             // Merge with previously collected results and deduplicate
             const allResults = [...collectedResults, ...organicResults];
@@ -214,10 +224,33 @@ export async function createAndStartContentCrawler(
     return { key, crawler };
 }
 
-const URL_TO_MARKDOWN_PPE_EVENTS = {
-    RAW_HTTP: 'raw-http-result',
-    PLAYWRIGHT: 'playwright-result',
-};
+/**
+ * Sends at most one charge per page: Crawlee retries a handler that fails after its charge went out, and
+ * that charge may already have been recorded.
+ */
+async function chargeFetchOnce(request: Request<ContentCrawlerUserData>, crawlerType: ContentCrawlerTypes) {
+    if (request.userData.isFetchChargeAttempted) return;
+
+    request.userData.isFetchChargeAttempted = true;
+    await chargeFetch(crawlerType, {
+        actorRequestId: request.userData.actorRequestId,
+        idempotencyKey: request.uniqueKey,
+    });
+}
+
+/**
+ * Hands a finished page to the response it belongs to.
+ *
+ * Only called once the page has been charged for: a response completes as soon as none of its pages are
+ * pending any more, so registering a page earlier would let a sibling finishing first send the response
+ * while this page's charge is still in flight - and the platform refuses a charge whose request is gone.
+ */
+function completeContentRequest(request: Request<ContentCrawlerUserData>, result: Output) {
+    const { responseId } = request.userData;
+
+    addResultToResponse(responseId, request.uniqueKey, result);
+    sendResponseIfFinished(responseId);
+}
 
 async function createPlaywrightContentCrawler(
     crawlerOptions: PlaywrightCrawlerOptions,
@@ -231,9 +264,9 @@ async function createPlaywrightContentCrawler(
         requestQueue: await RequestQueue.open(key, { storageClient: client }),
         requestHandler: (async (context) => {
             const typedContext = context as unknown as PlaywrightCrawlingContext<ContentCrawlerUserData>;
-            await requestHandlerPlaywright(typedContext, blocker);
-            await maybeCharge(ContentCrawlerTypes.PLAYWRIGHT, typedContext.request.userData.actorRequestId);
-            sendResponseIfFinished(typedContext.request.userData.responseId!);
+            const result = await requestHandlerPlaywright(typedContext, blocker);
+            await chargeFetchOnce(typedContext.request, ContentCrawlerTypes.PLAYWRIGHT);
+            completeContentRequest(typedContext.request, result);
         }),
         failedRequestHandler: async ({ request }, err) => {
             await failedRequestHandler(request, err, ContentCrawlerTypes.PLAYWRIGHT);
@@ -254,86 +287,15 @@ async function createCheerioContentCrawler(
         requestQueue: await RequestQueue.open(key, { storageClient: client }),
         requestHandler: (async (context) => {
             const typedContext = context as unknown as CheerioCrawlingContext<ContentCrawlerUserData>;
-            await requestHandlerCheerio(typedContext);
-            await maybeCharge(ContentCrawlerTypes.CHEERIO, typedContext.request.userData.actorRequestId);
-            sendResponseIfFinished(typedContext.request.userData.responseId!);
+            const result = await requestHandlerCheerio(typedContext);
+            await chargeFetchOnce(typedContext.request, ContentCrawlerTypes.CHEERIO);
+            completeContentRequest(typedContext.request, result);
         }),
         failedRequestHandler: async ({ request }, err) => {
             await failedRequestHandler(request, err, ContentCrawlerTypes.CHEERIO);
             sendResponseIfFinished(request.userData.responseId!);
         },
     });
-}
-
-function getEventName(crawlerType: ContentCrawlerTypes): string {
-    return crawlerType === ContentCrawlerTypes.PLAYWRIGHT
-        ? URL_TO_MARKDOWN_PPE_EVENTS.PLAYWRIGHT
-        : URL_TO_MARKDOWN_PPE_EVENTS.RAW_HTTP;
-}
-
-/**
- * Normal (non-standby) single-run charging via the Actor SDK.
- */
-async function chargeNormal(eventName: string): Promise<void> {
-    await Actor.charge({ eventName });
-}
-
-/**
- * Multi-tenant standby charging: POSTs directly to the platform charge REST endpoint,
- * passing the calling request's ID so that the correct caller (not the Actor owner) is billed.
- */
-async function chargeStandby(eventName: string, actorRequestId: string): Promise<void> {
-    const { apiBaseUrl, actorRunId, token } = Actor.getEnv();
-    if (!apiBaseUrl || !actorRunId || !token) {
-        log.warning(`Skipping standby charge for ${eventName} event: missing apiBaseUrl/actorRunId/token from Actor.getEnv().`);
-        return;
-    }
-    const url = `${apiBaseUrl}v2/actor-runs/${actorRunId}/charge`;
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-            'Idempotency-Key': randomId(),
-        },
-        body: JSON.stringify({ eventName, count: 1, requestId: actorRequestId }),
-    });
-    if (!response.ok) {
-        const resText = await response.text();
-        throw new Error(`Charging failed: ${resText}`);
-    }
-}
-
-/**
- * Dispatches to the correct charging path (normal single-run vs. multi-tenant standby)
- * based on isActorStandby().
- */
-const CHARGE_TIMEOUT_MILLIS = 5_000;
-
-async function maybeCharge(crawlerType: ContentCrawlerTypes, actorRequestId?: string) {
-    if (getMiniActor().name !== 'url-to-markdown') {
-        return;
-    }
-    const eventName = getEventName(crawlerType);
-    try {
-        const chargePromise = isActorStandby()
-            ? (async () => {
-                if (!actorRequestId) {
-                    log.warning(`Skipping standby charge for ${eventName} event: missing actorRequestId (x-actor-request-id header was not provided).`);
-                    return;
-                }
-                await chargeStandby(eventName, actorRequestId);
-            })()
-            : chargeNormal(eventName);
-
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error(`Charging timed out after ${CHARGE_TIMEOUT_MILLIS} ms`)), CHARGE_TIMEOUT_MILLIS);
-        });
-
-        await Promise.race([chargePromise, timeoutPromise]);
-    } catch (err) {
-        log.error(`Failed to charge for ${eventName} event: ${err instanceof Error ? err.message : String(err)}`);
-    }
 }
 
 /**
