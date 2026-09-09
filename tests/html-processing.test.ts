@@ -89,6 +89,7 @@ describe('extractLinks', () => {
 
     it('ignores empty and unparseable hrefs and returns [] when there are no links', () => {
         expect(extractLinks(parse('<body><a href="">x</a><a href="   ">y</a></body>'), BASE)).toEqual([]);
+        expect(extractLinks(parse('<body><a href="http://[::1">bad</a></body>'), BASE)).toEqual([]);
         expect(extractLinks(parse('<body><p>no links here</p></body>'), BASE)).toEqual([]);
     });
 });
