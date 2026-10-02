@@ -12,7 +12,14 @@ import { ContentCrawlerStatus } from '../src/const.js';
 import { createAndStartContentCrawler, createAndStartSearchCrawler } from '../src/crawlers.js';
 import { processStandbyInput } from '../src/input.js';
 import { createServer } from '../src/server.js';
-import { getImageRequestCount, resetImageRequestCount, startTestServer, stopTestServer } from './helpers/server.js';
+import {
+    getImageRequestCount,
+    MARKDOWN_DOCUMENT,
+    PLAIN_TEXT_DOCUMENT,
+    resetImageRequestCount,
+    startTestServer,
+    stopTestServer,
+} from './helpers/server.js';
 
 describe('Standby RAG tests', () => {
     let browserServer: Server;
@@ -74,6 +81,33 @@ describe('Standby RAG tests', () => {
         expect(data[0].metadata.url).toBe(`${baseUrl}/basic`);
         expect(data[0].crawl.httpStatusCode).toBe(200);
         expect(data[0].markdown).toContain('hello world');
+    });
+
+    // Documents such as agents.md or llms.txt, which AI agents read instructions from, need no conversion.
+    // Crawlee's HTTP crawler would reject them, and a browser shows them as plain text, unlike a web page.
+    describe.each(['raw-http', 'browser-playwright'])('Markdown and plain text documents with %s', (tool) => {
+        async function fetchDocument(path: string) {
+            const query = `query=${baseUrl}${path}&scrapingTool=${tool}&outputFormats=markdown,text`;
+            const response = await fetch(`http://localhost:${browserServerPort}/search?${query}`);
+            expect(response.status).toBe(200);
+            const [result] = await response.json();
+            return result;
+        }
+
+        it('returns a Markdown document unchanged', async () => {
+            const result = await fetchDocument('/agents.md');
+
+            expect(result.crawl.requestStatus).toBe(ContentCrawlerStatus.HANDLED);
+            expect(result.markdown).toBe(MARKDOWN_DOCUMENT);
+            expect(result.text).toBe(MARKDOWN_DOCUMENT);
+        });
+
+        it('returns a plain text document unchanged', async () => {
+            const result = await fetchDocument('/llms.txt');
+
+            expect(result.crawl.requestStatus).toBe(ContentCrawlerStatus.HANDLED);
+            expect(result.markdown).toBe(PLAIN_TEXT_DOCUMENT);
+        });
     });
 
     it('standby request with a media file URL is skipped without downloading it', async () => {

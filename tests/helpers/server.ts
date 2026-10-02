@@ -15,6 +15,21 @@ export function resetImageRequestCount(): void {
     imageRequestCount = 0;
 }
 
+/** Holds the syntax that would be escaped, were the document processed as HTML. */
+export const MARKDOWN_DOCUMENT = [
+    '# Agent instructions',
+    '',
+    'Read the *whole* file before you [start](/docs/start).',
+    '',
+    '```bash',
+    '# install the CLI',
+    'npm install -g apify-cli',
+    '```',
+    '',
+].join('\n');
+
+export const PLAIN_TEXT_DOCUMENT = '# Example docs\n\n- [Guide](https://example.com/guide): how to start\n';
+
 /**
  * Creates and returns an Express server with test routes
  */
@@ -53,6 +68,14 @@ export function createTestServer(): express.Express {
 
     app.get('/serp-error', (_req, res) => {
         res.status(500).send('nope');
+    });
+
+    app.get('/agents.md', (_req, res) => {
+        res.type('text/markdown').send(MARKDOWN_DOCUMENT);
+    });
+
+    app.get('/llms.txt', (_req, res) => {
+        res.type('text/plain').send(PLAIN_TEXT_DOCUMENT);
     });
 
     // Has no media file extension, so it is not skipped - the crawler rejects its content type instead.

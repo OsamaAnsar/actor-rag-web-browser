@@ -117,6 +117,13 @@ function isValidContentType(contentType: string | undefined) {
     return ['text', 'html', 'xml'].some((type) => contentType?.includes(type));
 }
 
+/** Content types of documents that are Markdown or plain text already, which need no conversion. */
+export const TEXT_DOCUMENT_CONTENT_TYPES = ['text/markdown', 'text/plain'];
+
+function isTextDocument(contentType: string | undefined) {
+    return TEXT_DOCUMENT_CONTENT_TYPES.some((type) => contentType?.includes(type));
+}
+
 /** Playwright exposes the headers through a method, but the context types also allow a plain object. */
 function getPlaywrightResponseHeaders(response: PlaywrightCrawlingContext['response']): IncomingHttpHeaders | undefined {
     if (!response) return undefined;
@@ -229,6 +236,51 @@ async function handleContent(
 }
 
 /**
+ * Stores a Markdown or plain text document as it is, since it is already in the form we would convert a
+ * page to.
+ */
+async function handleTextDocument(
+    text: string,
+    crawlerType: ContentCrawlerTypes,
+    statusCode: number | undefined,
+    headers: IncomingHttpHeaders | undefined,
+    context: ContentCrawlingContext,
+): Promise<Output> {
+    const { request } = context;
+    const { contentScraperSettings: settings } = request.userData;
+
+    const result: Output = {
+        crawl: {
+            httpStatusCode: statusCode,
+            httpStatusMessage: 'OK',
+            loadedAt: new Date(),
+            uniqueKey: request.uniqueKey,
+            requestStatus: ContentCrawlerStatus.HANDLED,
+        },
+        searchResult: request.userData.searchResult!,
+        metadata: {
+            title: '',
+            url: request.loadedUrl ?? request.url,
+            redirectedUrl: request.loadedUrl,
+            headers,
+        },
+        query: request.userData.query,
+        text: settings.outputFormats.includes('text') ? text : undefined,
+        markdown: settings.outputFormats.includes('markdown') ? text : undefined,
+        // The document has no HTML to return.
+        html: settings.outputFormats.includes('html') ? null : undefined,
+    };
+
+    addTimeMeasureEvent(request.userData, `${crawlerType}-before-response-send`);
+    if (settings.debugMode) {
+        result.crawl.debug = { timeMeasures: transformTimeMeasuresToRelative(request.userData.timeMeasures!) };
+    }
+    log.info(`Adding result to the Apify dataset, url: ${request.url}`);
+    await context.pushData(result);
+    return result;
+}
+
+/**
  * @returns The result for this page. The caller registers it with the response, once the page has been
  * charged for.
  */
@@ -247,6 +299,17 @@ export async function requestHandlerPlaywright(
     // Media file requests are created with `skipNavigation` (see `createRequest`), so there is no page to process.
     if (request.skipNavigation) {
         return pushSkippedResult(context, SKIPPED_MEDIA_FILE_MESSAGE);
+    }
+
+    const headers = getPlaywrightResponseHeaders(response);
+    const contentType = headers?.['content-type'];
+    const statusCode = response?.status();
+
+    // The browser shows such a document as plain text, so there is nothing to wait for, close or expand. The text
+    // is taken from the page as it is: serialized and parsed again, it would lose a line break it starts with.
+    if (isTextDocument(contentType)) {
+        const text = await page.evaluate(() => document.body.textContent ?? '');
+        return handleTextDocument(text, ContentCrawlerTypes.PLAYWRIGHT, statusCode, headers, context);
     }
 
     if (settings.dynamicContentWaitSecs > 0) {
@@ -288,10 +351,7 @@ export async function requestHandlerPlaywright(
     const $ = await context.parseWithCheerio();
     addTimeMeasureEvent(request.userData, 'playwright-parse-with-cheerio');
 
-    const headers = getPlaywrightResponseHeaders(response);
-    const statusCode = response?.status();
-
-    const skipped = await skipUnparsableResponse($, headers?.['content-type'], statusCode, context);
+    const skipped = await skipUnparsableResponse($, contentType, statusCode, context);
     if (skipped) return skipped;
 
     return handleContent($, ContentCrawlerTypes.PLAYWRIGHT, statusCode, headers, context);
@@ -301,7 +361,7 @@ export async function requestHandlerPlaywright(
 export async function requestHandlerCheerio(
     context: CheerioCrawlingContext<ContentCrawlerUserData>,
 ): Promise<Output> {
-    const { $, request, response } = context;
+    const { $, body, contentType, request, response } = context;
     const { responseId } = request.userData;
 
     if (isActorStandby()) checkTimeoutAndCancelRequest(request, responseId);
@@ -315,6 +375,13 @@ export async function requestHandlerCheerio(
     }
 
     const { statusCode } = response;
+
+    // Crawlee parses only HTML and XML, and hands over the body of any other content type as a buffer.
+    // Its content type is also inferred from the URL extension when the server doesn't send one.
+    if (isTextDocument(contentType.type)) {
+        const text = typeof body === 'string' ? body : body.toString(contentType.encoding);
+        return handleTextDocument(text, ContentCrawlerTypes.CHEERIO, statusCode, response.headers, context);
+    }
 
     const skipped = await skipUnparsableResponse($, response.headers['content-type'], statusCode, context);
     if (skipped) return skipped;

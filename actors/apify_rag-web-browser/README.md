@@ -14,7 +14,8 @@ similar to the [web browsing](https://openai.com/index/introducing-chatgpt-searc
 - 🔄 **Flexible scraping** with Browser mode for complex websites or Plain HTML mode for faster scraping
 - 🕷 Automatically **bypasses anti-scraping protections** using proxies and browser fingerprints
 - 📝 Output formats include **Markdown**, plain text, and HTML
-- 🔗 **Links are converted to absolute URLs**, so they stay valid outside of the page they came from
+- 📄 **Markdown and plain text files**, such as `agents.md` or `llms.txt`, are returned unchanged
+- 🔗 **Links on web pages are converted to absolute URLs**, so they stay valid outside of the page they came from
 - 🪗 **Collapsed sections are expanded** in Browser mode, so their content is not missing from the output
 - 🔌 Supports **OpenAPI and MCP** for easy integration
 - 🪟 It's **open source**, so you can review and modify it
@@ -226,6 +227,12 @@ Media files carry no text for the LLM, so the Actor never downloads them:
   This saves bandwidth and often speeds up the page load, and it has no effect on the extracted content.
 - Search results (and a `query` that is a URL) pointing directly to a media file, e.g. `https://example.com/video.mp4`,
   are not crawled at all. Such a result is returned with an empty text and `Skipped media file` as the HTTP status message.
+
+### Markdown and plain text files
+
+Files that are Markdown or plain text already, e.g. `agents.md` or `llms.txt`, are recognized by their content type
+(`text/markdown` or `text/plain`) and returned unchanged in `markdown` and `text`, with either scraping tool. Their
+relative links are therefore not converted to absolute URLs.
 
 ### Collapsed content
 
