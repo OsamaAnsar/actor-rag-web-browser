@@ -2,7 +2,7 @@ import { load } from 'cheerio';
 import type { CheerioAPI } from 'crawlee';
 import { describe, expect, it } from 'vitest';
 
-import { extractTitle } from '../src/website-content-crawler/html-processing.js';
+import { extractTitle, getDocumentBaseUrl } from '../src/website-content-crawler/html-processing.js';
 
 // The `cheerio` version bundled with Crawlee differs from the top-level one, so the types don't match.
 const parse = (html: string) => load(html) as unknown as CheerioAPI;
@@ -43,5 +43,12 @@ describe('extractTitle', () => {
     it('should trim surrounding whitespace', () => {
         const $ = parse('<html><head><title>\n   Test Title  \n</title></head><body></body></html>');
         expect(extractTitle($)).toBe('Test Title');
+    });
+});
+
+describe('getDocumentBaseUrl', () => {
+    it('should resolve a relative base against the page URL', () => {
+        const $ = parse('<html><head><base href="/docs/"></head><body></body></html>');
+        expect(getDocumentBaseUrl($, 'https://example.com/a/b')).toBe('https://example.com/docs/');
     });
 });

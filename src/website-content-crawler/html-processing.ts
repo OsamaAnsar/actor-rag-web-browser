@@ -29,6 +29,17 @@ export function extractTitle($: CheerioAPI): string {
     return '';
 }
 
+export function getDocumentBaseUrl($: CheerioAPI, pageUrl: string): string {
+    const href = $('base[href]').first().attr('href');
+    if (!href) return pageUrl;
+
+    try {
+        return new URL(href, pageUrl).href;
+    } catch {
+        return pageUrl;
+    }
+}
+
 export function extractCanonicalUrl($: CheerioAPI, baseUrl: string): string | undefined {
     const href = $('html > head > link[rel="canonical"]').first().attr('href');
     if (!href) return undefined;
