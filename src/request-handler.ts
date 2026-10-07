@@ -230,7 +230,7 @@ async function handleContent(
             : undefined,
         html: settings.outputFormats.includes('html') ? processedHtml : undefined,
         links: settings.outputFormats.includes('links')
-            ? extractLinks($, request.loadedUrl ?? request.url)
+            ? extractLinks($, baseUrl)
             : undefined,
     };
 

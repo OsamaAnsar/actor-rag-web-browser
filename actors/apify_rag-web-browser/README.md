@@ -234,6 +234,17 @@ Files that are Markdown or plain text already, e.g. `agents.md` or `llms.txt`, a
 (`text/markdown` or `text/plain`) and returned unchanged in `markdown` and `text`, with either scraping tool. Their
 relative links are therefore not converted to absolute URLs.
 
+### Links
+
+The `links` output format returns an ordered, de-duplicated array of the absolute HTTP(S) URLs of the links on the page
+(`<a href>` and image map `<area href>`), resolved against the page's `<base href>` when it has one. Links to other
+schemes (e.g. `mailto:`) and in-page anchors (`#section`) are left out, while the hash-routing links of single-page
+apps (e.g. `#/quickstart` or `#!/page`) are kept.
+
+The tool that fetches the page decides which links it sees. In Plain HTML mode (`scrapingTool=raw-http`), only the links
+that are present in the HTML returned by the server are found, so JavaScript-heavy pages return far fewer links than in
+Browser mode (`scrapingTool=browser-playwright`), which reads the page after its JavaScript has run.
+
 ### Collapsed content
 
 Some web pages keep parts of their content hidden until the reader expands them, e.g. accordions or

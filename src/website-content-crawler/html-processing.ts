@@ -56,16 +56,23 @@ export function extractCanonicalUrl($: CheerioAPI, baseUrl: string): string | un
 }
 
 /**
- * Collects every `<a href>` on the page as a de-duplicated list of absolute HTTP(S) URLs, resolved
- * against `baseUrl`. Non-HTTP(S) schemes (`mailto:`, `tel:`, `javascript:`, …), unparseable hrefs and
- * bare same-page anchors (`#section`) are dropped. Order of first appearance is preserved.
+ * A bare same-page anchor (`#section`, `#`) points into the page we already have. Hash-routing links of
+ * single-page apps (`#/quickstart`, `#!/page`) are navigation, so they are not anchors.
+ */
+const isSamePageAnchor = (href: string) => href.startsWith('#') && !/^#[!/]/.test(href);
+
+/**
+ * Collects every `<a href>` and image map `<area href>` on the page as a de-duplicated list of absolute
+ * HTTP(S) URLs, resolved against `baseUrl`. Non-HTTP(S) schemes (`mailto:`, `tel:`, `javascript:`, …),
+ * unparseable hrefs, bare same-page anchors (`#section`) and unrendered template hrefs (`{{ item.url }}`)
+ * are dropped. Hash-routing links (`#/page`, `#!/page`) are kept. Order of first appearance is preserved.
  */
 export function extractLinks($: CheerioAPI, baseUrl: string): string[] {
     const seen = new Set<string>();
 
-    for (const element of $('a[href]').get()) {
+    for (const element of $('a[href], area[href]').get()) {
         const href = $(element).attr('href')?.trim();
-        if (!href || href.startsWith('#')) continue;
+        if (!href || isSamePageAnchor(href) || href.includes('{{')) continue;
 
         try {
             const url = new URL(href, baseUrl);

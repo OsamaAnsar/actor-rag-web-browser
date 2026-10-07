@@ -151,6 +151,15 @@ describe('Standby RAG tests', () => {
         expect(data[0].markdown).toContain(`[in-page anchor](${pageUrl}#section)`);
     });
 
+    it('standby request with the links output format resolves links against the base URL', async () => {
+        const query = new URLSearchParams({ query: `${baseUrl}/with-base`, outputFormats: JSON.stringify(['links']) });
+        const response = await fetch(`http://localhost:${browserServerPort}/search?${query}`);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data[0].links).toEqual(['https://cdn.example.org/sub/article']);
+    });
+
     it('standby request with readableText resolves links against the URL redirected to', async () => {
         const query = new URLSearchParams({ query: `${baseUrl}/redirect/page`, htmlTransformer: 'readableText' });
         const response = await fetch(`http://localhost:${browserServerPort}/search?${query}`);
