@@ -12,7 +12,14 @@ import { ContentCrawlerStatus } from '../src/const.js';
 import { createAndStartContentCrawler, createAndStartSearchCrawler } from '../src/crawlers.js';
 import { processStandbyInput } from '../src/input.js';
 import { createServer } from '../src/server.js';
-import { getImageRequestCount, resetImageRequestCount, startTestServer, stopTestServer } from './helpers/server.js';
+import {
+    getImageRequestCount,
+    MARKDOWN_DOCUMENT,
+    PLAIN_TEXT_DOCUMENT,
+    resetImageRequestCount,
+    startTestServer,
+    stopTestServer,
+} from './helpers/server.js';
 
 describe('Standby RAG tests', () => {
     let browserServer: Server;
@@ -76,6 +83,33 @@ describe('Standby RAG tests', () => {
         expect(data[0].markdown).toContain('hello world');
     });
 
+    // Documents such as agents.md or llms.txt, which AI agents read instructions from, need no conversion.
+    // Crawlee's HTTP crawler would reject them, and a browser shows them as plain text, unlike a web page.
+    describe.each(['raw-http', 'browser-playwright'])('Markdown and plain text documents with %s', (tool) => {
+        async function fetchDocument(path: string) {
+            const query = `query=${baseUrl}${path}&scrapingTool=${tool}&outputFormats=markdown,text`;
+            const response = await fetch(`http://localhost:${browserServerPort}/search?${query}`);
+            expect(response.status).toBe(200);
+            const [result] = await response.json();
+            return result;
+        }
+
+        it('returns a Markdown document unchanged', async () => {
+            const result = await fetchDocument('/agents.md');
+
+            expect(result.crawl.requestStatus).toBe(ContentCrawlerStatus.HANDLED);
+            expect(result.markdown).toBe(MARKDOWN_DOCUMENT);
+            expect(result.text).toBe(MARKDOWN_DOCUMENT);
+        });
+
+        it('returns a plain text document unchanged', async () => {
+            const result = await fetchDocument('/llms.txt');
+
+            expect(result.crawl.requestStatus).toBe(ContentCrawlerStatus.HANDLED);
+            expect(result.markdown).toBe(PLAIN_TEXT_DOCUMENT);
+        });
+    });
+
     it('standby request with a media file URL is skipped without downloading it', async () => {
         resetImageRequestCount();
 
@@ -100,6 +134,31 @@ describe('Standby RAG tests', () => {
         expect(data.length).toBe(1);
         expect(data[0].crawl.httpStatusMessage).toBe('Skipped media file');
         expect(getImageRequestCount()).toBe(0);
+    });
+
+    it.each([
+        { htmlTransformer: 'none' },
+        { htmlTransformer: 'readableText' },
+    ])('standby request with $htmlTransformer resolves links against the base URL', async (params) => {
+        const pageUrl = `${baseUrl}/with-base`;
+        const query = new URLSearchParams({ query: pageUrl, ...params });
+        const response = await fetch(`http://localhost:${browserServerPort}/search?${query}`);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data[0].metadata.canonicalUrl).toBe('https://cdn.example.org/sub/canonical-page');
+        expect(data[0].markdown).toContain('[relative link](https://cdn.example.org/sub/article)');
+        expect(data[0].markdown).toContain(`[in-page anchor](${pageUrl}#section)`);
+    });
+
+    it('standby request with readableText resolves links against the URL redirected to', async () => {
+        const query = new URLSearchParams({ query: `${baseUrl}/redirect/page`, htmlTransformer: 'readableText' });
+        const response = await fetch(`http://localhost:${browserServerPort}/search?${query}`);
+        const data = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(data[0].metadata.url).toBe(`${baseUrl}/redirected/page`);
+        expect(data[0].markdown).toContain(`[relative link](${baseUrl}/redirected/article)`);
     });
 
     it('standby request playwright does not download media files of the page', async () => {

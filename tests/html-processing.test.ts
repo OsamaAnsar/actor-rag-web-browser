@@ -2,7 +2,7 @@ import { load } from 'cheerio';
 import type { CheerioAPI } from 'crawlee';
 import { describe, expect, it } from 'vitest';
 
-import { extractLinks, extractTitle } from '../src/website-content-crawler/html-processing.js';
+import { extractLinks, extractTitle, getDocumentBaseUrl } from '../src/website-content-crawler/html-processing.js';
 
 // The `cheerio` version bundled with Crawlee differs from the top-level one, so the types don't match.
 const parse = (html: string) => load(html) as unknown as CheerioAPI;
@@ -91,5 +91,12 @@ describe('extractLinks', () => {
         expect(extractLinks(parse('<body><a href="">x</a><a href="   ">y</a></body>'), BASE)).toEqual([]);
         expect(extractLinks(parse('<body><a href="http://[::1">bad</a></body>'), BASE)).toEqual([]);
         expect(extractLinks(parse('<body><p>no links here</p></body>'), BASE)).toEqual([]);
+    });
+});
+
+describe('getDocumentBaseUrl', () => {
+    it('should resolve a relative base against the page URL', () => {
+        const $ = parse('<html><head><base href="/docs/"></head><body></body></html>');
+        expect(getDocumentBaseUrl($, 'https://example.com/a/b')).toBe('https://example.com/docs/');
     });
 });
