@@ -13,7 +13,7 @@ similar to the [web browsing](https://openai.com/index/introducing-chatgpt-searc
 - ⚙️ Supports **dynamic JavaScript-heavy websites** using a headless browser
 - 🔄 **Flexible scraping** with Browser mode for complex websites or Plain HTML mode for faster scraping
 - 🕷 Automatically **bypasses anti-scraping protections** using proxies and browser fingerprints
-- 📝 Output formats include **Markdown**, plain text, HTML, and a **`links`** list (all absolute HTTP(S) URLs on the page)
+- 📝 Output formats include **Markdown**, plain text, HTML, and a **`links`** list (all absolute HTTP(S) URLs on the page, with their link text)
 - 📄 **Markdown and plain text files**, such as `agents.md` or `llms.txt`, are returned unchanged
 - 🔗 **Links on web pages are converted to absolute URLs**, so they stay valid outside of the page they came from
 - 🪗 **Collapsed sections are expanded** in Browser mode, so their content is not missing from the output
@@ -236,10 +236,22 @@ relative links are therefore not converted to absolute URLs.
 
 ### Links
 
-The `links` output format returns an ordered, de-duplicated array of the absolute HTTP(S) URLs of the links on the page
-(`<a href>` and image map `<area href>`), resolved against the page's `<base href>` when it has one. Links to other
-schemes (e.g. `mailto:`) and in-page anchors (`#section`) are left out, while the hash-routing links of single-page
-apps (e.g. `#/quickstart` or `#!/page`) are kept.
+The `links` output format returns an ordered, de-duplicated array of the links on the page (`<a href>` and image map
+`<area href>`). Each link is an object with its absolute HTTP(S) `url`, resolved against the page's `<base href>`
+when it has one, and, when available, the visible link `text`:
+
+```json
+"links": [
+    { "url": "https://example.com/pricing", "text": "Pricing" },
+    { "url": "https://example.com/assets/logo.svg" }
+]
+```
+
+The `text` is the text of the link, or for an icon or image link its `aria-label`, `title` or `alt`, or the `alt` of
+an image inside it. Whitespace is collapsed, the text is cut to 200 characters, and `text` is left out when the link has
+none. If a URL appears more than once, its first non-empty text is kept. Links to other schemes (e.g. `mailto:`) and
+in-page anchors (`#section`) are left out, while the hash-routing links of single-page apps (e.g. `#/quickstart` or
+`#!/page`) are kept.
 
 The tool that fetches the page decides which links it sees. In Plain HTML mode (`scrapingTool=raw-http`), only the links
 that are present in the HTML returned by the server are found, so JavaScript-heavy pages return far fewer links than in

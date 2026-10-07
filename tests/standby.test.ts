@@ -157,7 +157,7 @@ describe('Standby RAG tests', () => {
         const data = await response.json();
 
         expect(response.status).toBe(200);
-        expect(data[0].links).toEqual(['https://cdn.example.org/sub/article']);
+        expect(data[0].links).toEqual([{ url: 'https://cdn.example.org/sub/article', text: 'relative link' }]);
     });
 
     it('standby request with readableText resolves links against the URL redirected to', async () => {

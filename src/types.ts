@@ -141,11 +141,17 @@ export type ContentCrawlerUserData = {
     actorRequestId?: string;
 };
 
+/** A link found on a page: its absolute HTTP(S) URL and, when it has any, its visible text. */
+export type Link = {
+    url: string;
+    text?: string;
+};
+
 export type Output = {
     text?: string | null;
     html?: string | null;
     markdown?: string | null;
-    links?: string[];
+    links?: Link[];
     query?: string;
     crawl: {
         createdAt?: Date;

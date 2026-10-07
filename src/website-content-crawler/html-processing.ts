@@ -1,7 +1,8 @@
 import type { CheerioAPI } from 'crawlee';
 import { log } from 'crawlee';
+import type { Element } from 'domhandler';
 
-import type { ContentScraperSettings, OpenGraphProperty } from '../types.js';
+import type { ContentScraperSettings, Link, OpenGraphProperty } from '../types.js';
 import { readableText } from './text-extractor.js';
 
 const SKIP_CHILD_OF_ELEMENT_SELECTORS = ['.crawlee-iframe-replacement *', 'svg *'].join(', ');
@@ -61,29 +62,78 @@ export function extractCanonicalUrl($: CheerioAPI, baseUrl: string): string | un
  */
 const isSamePageAnchor = (href: string) => href.startsWith('#') && !/^#[!/]/.test(href);
 
+/** The text of a link is cut to this many characters, so that a link wrapping a whole card stays short. */
+const MAX_LINK_TEXT_LENGTH = 200;
+
+/** Elements whose content is code or markup that is not shown, even when they sit inside a link. */
+const NON_VISIBLE_TEXT_SELECTOR = 'script, style, noscript, template';
+
+/** Collapses whitespace and cuts to `MAX_LINK_TEXT_LENGTH` characters (code points, so that no emoji is split). */
+function normalizeLinkText(text: string | undefined): string {
+    const collapsed = (text ?? '').replace(/\s+/g, ' ').trim();
+    return Array.from(collapsed).slice(0, MAX_LINK_TEXT_LENGTH).join('').trim();
+}
+
 /**
- * Collects every `<a href>` and image map `<area href>` on the page as a de-duplicated list of absolute
- * HTTP(S) URLs, resolved against `baseUrl`. Non-HTTP(S) schemes (`mailto:`, `tel:`, `javascript:`, …),
- * unparseable hrefs, bare same-page anchors (`#section`) and unrendered template hrefs (`{{ item.url }}`)
- * are dropped. Hash-routing links (`#/page`, `#!/page`) are kept. Order of first appearance is preserved.
+ * The visible text of a link, falling back to its accessible names for icon and image links: the
+ * `aria-label`, `title` and `alt` attributes, and the `alt` of an image inside it. The result is plain text.
  */
-export function extractLinks($: CheerioAPI, baseUrl: string): string[] {
-    const seen = new Set<string>();
+function extractLinkText($: CheerioAPI, element: Element): string {
+    const $el = $(element);
+    const getVisibleText = () => {
+        const $copy = $el.clone();
+        $copy.find(NON_VISIBLE_TEXT_SELECTOR).remove();
+        return $copy.text();
+    };
+    const candidates = [
+        getVisibleText,
+        () => $el.attr('aria-label'),
+        () => $el.attr('title'),
+        () => $el.attr('alt'),
+        () => $el.find('img[alt]').first().attr('alt'),
+    ];
+
+    for (const candidate of candidates) {
+        const text = normalizeLinkText(candidate());
+        if (text) return text;
+    }
+    return '';
+}
+
+/**
+ * Collects every `<a href>` and image map `<area href>` on the page as a de-duplicated list of links, with
+ * absolute HTTP(S) URLs resolved against `baseUrl` and the visible text of the link when it has any.
+ * Non-HTTP(S) schemes (`mailto:`, `tel:`, `javascript:`, …), unparseable hrefs, bare same-page anchors
+ * (`#section`) and unrendered template hrefs (`{{ item.url }}`) are dropped. Hash-routing links (`#/page`,
+ * `#!/page`) are kept. Order of first appearance is preserved, and a URL that appears more than once keeps
+ * the first non-empty text.
+ */
+export function extractLinks($: CheerioAPI, baseUrl: string): Link[] {
+    const links = new Map<string, Link>();
 
     for (const element of $('a[href], area[href]').get()) {
         const href = $(element).attr('href')?.trim();
         if (!href || isSamePageAnchor(href) || href.includes('{{')) continue;
 
+        let url: URL;
         try {
-            const url = new URL(href, baseUrl);
-            if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
-            seen.add(url.href);
+            url = new URL(href, baseUrl);
         } catch {
             // Ignore hrefs that don't resolve to a valid URL.
+            continue;
+        }
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+
+        const text = extractLinkText($, element);
+        const existing = links.get(url.href);
+        if (!existing) {
+            links.set(url.href, text ? { url: url.href, text } : { url: url.href });
+        } else if (!existing.text && text) {
+            existing.text = text;
         }
     }
 
-    return [...seen];
+    return [...links.values()];
 }
 
 export function extractOpenGraphProperties($: CheerioAPI): OpenGraphProperty[] | undefined {
