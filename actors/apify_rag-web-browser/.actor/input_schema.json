@@ -33,12 +33,14 @@
                     "enum": [
                         "text",
                         "markdown",
-                        "html"
+                        "html",
+                        "links"
                     ],
                     "enumTitles": [
                         "Plain text",
                         "Markdown",
-                        "HTML"
+                        "HTML",
+                        "Links"
                     ]
                 }
             },
