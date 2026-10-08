@@ -23,7 +23,7 @@
             "outputFormats": {
                 "title": "Output formats",
                 "type": "array",
-                "description": "Select one or more formats to which the target web pages will be extracted and saved in the resulting dataset. `Links` returns an ordered, de-duplicated array of objects with the absolute HTTP(S) `url` and, when available, the visible link `text`.",
+                "description": "Select one or more formats to which the target web pages will be extracted and saved in the resulting dataset.",
                 "editor": "select",
                 "default": [
                     "markdown"
