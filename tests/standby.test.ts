@@ -86,8 +86,11 @@ describe('Standby RAG tests', () => {
     // Documents such as agents.md or llms.txt, which AI agents read instructions from, need no conversion.
     // Crawlee's HTTP crawler would reject them, and a browser shows them as plain text, unlike a web page.
     describe.each(['raw-http', 'browser-playwright'])('Markdown and plain text documents with %s', (tool) => {
+        // Each fetch gets its own URL: a browser revalidates a repeated one and gets a 304 without a Content-Type.
+        let fetchCount = 0;
         async function fetchDocument(path: string, outputFormats = ['markdown', 'text']) {
-            const query = new URLSearchParams({ query: `${baseUrl}${path}`, scrapingTool: tool, outputFormats: JSON.stringify(outputFormats) });
+            const documentUrl = `${baseUrl}${path}?fetch=${fetchCount++}`;
+            const query = new URLSearchParams({ query: documentUrl, scrapingTool: tool, outputFormats: JSON.stringify(outputFormats) });
             const response = await fetch(`http://localhost:${browserServerPort}/search?${query}`);
             expect(response.status).toBe(200);
             const [result] = await response.json();
