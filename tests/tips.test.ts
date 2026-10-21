@@ -134,8 +134,8 @@ describe('findActorTip', () => {
 });
 
 describe('findActorTipInResults', () => {
-    function mockResults(...results: { url: string; rank: number }[]) {
-        const items = results.map(({ url, rank }) => ({ metadata: { url }, searchResult: { rank } }));
+    function mockResults(...results: { url: string; rank?: number }[]) {
+        const items = results.map(({ url, rank }) => (rank === undefined ? { metadata: { url } } : { metadata: { url }, searchResult: { rank } }));
         vi.spyOn(Actor, 'openDataset').mockResolvedValue({ getData: async () => ({ items }) } as unknown as Dataset);
     }
 
@@ -143,7 +143,18 @@ describe('findActorTipInResults', () => {
         vi.restoreAllMocks();
     });
 
-    it('recommends a site that at least half of the results come from, even when another site ranks first', async () => {
+    it('recommends the site of the result Google ranked first, not of the page stored first', async () => {
+        // In the order the pages finished loading, which is how they are stored.
+        mockResults(
+            { url: 'https://example.com/', rank: 2 },
+            { url: 'https://www.facebook.com/apify', rank: 1 },
+            { url: 'https://example.org/', rank: 3 },
+        );
+
+        expect((await findActorTipInResults())?.message).toContain('Facebook Posts Scraper');
+    });
+
+    it('prefers the site of the top-ranked result over a site that half of the results come from', async () => {
         mockResults(
             { url: 'https://www.facebook.com/apify', rank: 1 },
             { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', rank: 2 },
@@ -151,41 +162,47 @@ describe('findActorTipInResults', () => {
             { url: 'https://example.com/', rank: 4 },
         );
 
-        expect((await findActorTipInResults())?.message).toContain('YouTube Scraper');
-    });
-
-    it('recommends the site of the highest-ranked listed result when no site has half of the results', async () => {
-        // In the order the pages finished loading, which is how they are stored.
-        mockResults(
-            { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', rank: 3 },
-            { url: 'https://www.facebook.com/apify', rank: 2 },
-            { url: 'https://example.com/', rank: 1 },
-        );
-
         expect((await findActorTipInResults())?.message).toContain('Facebook Posts Scraper');
     });
 
-    it('recommends the site of the higher-ranked result when two sites each have half of the results', async () => {
+    it('recommends a site that at least half of the results come from when the top-ranked result is not listed', async () => {
         mockResults(
-            { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', rank: 1 },
-            { url: 'https://www.facebook.com/apify', rank: 2 },
-            { url: 'https://www.facebook.com/nike', rank: 3 },
-            { url: 'https://www.youtube.com/watch?v=yPYZpwSpKmA', rank: 4 },
+            { url: 'https://example.com/', rank: 1 },
+            { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', rank: 2 },
+            { url: 'https://www.youtube.com/watch?v=yPYZpwSpKmA', rank: 3 },
+            { url: 'https://example.org/', rank: 4 },
         );
 
         expect((await findActorTipInResults())?.message).toContain('YouTube Scraper');
+    });
+
+    it('recommends nothing for listed sites that rank below an unlisted one and have less than half of the results', async () => {
+        mockResults(
+            { url: 'https://example.com/', rank: 1 },
+            { url: 'https://www.facebook.com/apify', rank: 2 },
+            { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', rank: 3 },
+            { url: 'https://www.instagram.com/apify/', rank: 4 },
+        );
+
+        expect(await findActorTipInResults()).toBeNull();
     });
 
     it('counts the results from unlisted sites toward the half', async () => {
         mockResults(
-            { url: 'https://www.facebook.com/apify', rank: 1 },
+            { url: 'https://example.com/', rank: 1 },
             { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', rank: 2 },
             { url: 'https://www.youtube.com/watch?v=yPYZpwSpKmA', rank: 3 },
-            { url: 'https://example.com/', rank: 4 },
-            { url: 'https://example.org/', rank: 5 },
+            { url: 'https://example.org/', rank: 4 },
+            { url: 'https://example.net/', rank: 5 },
         );
 
-        expect((await findActorTipInResults())?.message).toContain('Facebook Posts Scraper');
+        expect(await findActorTipInResults()).toBeNull();
+    });
+
+    it('recommends the site a fetched URL ended up on, when the results carry no rank', async () => {
+        mockResults({ url: 'https://www.instagram.com/apify/' });
+
+        expect((await findActorTipInResults())?.message).toContain('Instagram Scraper');
     });
 
     it('never throws when the results cannot be read', async () => {
