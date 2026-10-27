@@ -1,14 +1,23 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { type CheerioCrawlerOptions, log } from 'crawlee';
+import type { CheerioCrawlerOptions } from 'crawlee';
+import { log } from 'crawlee';
 
+import type { CrawlerKind } from './const.js';
 import { PLAYWRIGHT_REQUEST_TIMEOUT_NORMAL_MODE_SECS } from './const.js';
 import { addContentCrawlRequest, addSearchRequest, createAndStartContentCrawler, createAndStartSearchCrawler } from './crawlers.js';
 import { UserInputError } from './errors.js';
 import { processInput } from './input.js';
 import { getMiniActor } from './mini-actors.js';
-import { createResponsePromise } from './responses.js';
-import type { ContentCrawlerOptions, ContentScraperSettings, Input, Output, RagWebBrowserInput, UrlToMarkdownInput } from './types.js';
+import { createResponsePromise, RunShuttingDownError } from './responses.js';
+import type {
+    ContentCrawlerOptions,
+    ContentScraperSettings,
+    Input,
+    Output,
+    RagWebBrowserInput,
+    UrlToMarkdownInput,
+} from './types.js';
 import {
     addTimeMeasureEvent,
     createRequest,
@@ -26,11 +35,12 @@ import {
  */
 function prepareRequest(
     input: Input,
-    searchCrawlerOptions: CheerioCrawlerOptions,
-    contentCrawlerKey: string,
+    contentCrawlerKey: CrawlerKind,
     contentScraperSettings: ContentScraperSettings,
     actorRequestId?: string,
 ) {
+    // The crawlers are shared, so the proxy a caller asked for rides on the request instead.
+    const contentProxyOptions = input.proxyConfiguration;
     if (!getMiniActor().runsSearch) {
         const { url } = (input as Input & UrlToMarkdownInput);
         if (!url) {
@@ -47,6 +57,7 @@ function prepareRequest(
             { url: interpretedUrl },
             responseId,
             contentScraperSettings,
+            contentProxyOptions,
             null,
             actorRequestId,
         );
@@ -68,6 +79,7 @@ function prepareRequest(
             { url: validatedQuery },
             responseId,
             contentScraperSettings,
+            contentProxyOptions,
             null,
             actorRequestId,
         )
@@ -78,9 +90,12 @@ function prepareRequest(
                 maxResults,
                 contentCrawlerKey,
                 contentScraperSettings,
+                serpMaxRetries: (input as Input & RagWebBrowserInput).serpMaxRetries,
+                contentProxyOptions,
+                // `checkAccess` rides along so the access check this proxy never wanted stays skipped.
+                proxyOptions: { groups: [(input as Input & RagWebBrowserInput).serpProxyGroup], checkAccess: false },
                 actorRequestId,
             },
-            searchCrawlerOptions.proxyConfiguration,
         );
 
     addTimeMeasureEvent(req.userData!, 'request-received', Date.now());
@@ -100,7 +115,7 @@ async function runSearchProcess(params: Partial<Input>, actorRequestId?: string)
         contentScraperSettings,
     } = await processInput(params);
 
-    // Set keepAlive to true to find the correct crawlers
+    // A request that rebuilds a missing crawler must give it a Standby lifetime, not its own.
     searchCrawlerOptions.keepAlive = true;
     contentCrawlerOptions.crawlerOptions.keepAlive = true;
 
@@ -108,7 +123,6 @@ async function runSearchProcess(params: Partial<Input>, actorRequestId?: string)
 
     const { req, isUrl, responseId } = prepareRequest(
         input,
-        searchCrawlerOptions,
         contentCrawlerKey,
         contentScraperSettings,
         actorRequestId,
@@ -125,9 +139,9 @@ async function runSearchProcess(params: Partial<Input>, actorRequestId?: string)
         }
         await addContentCrawlRequest(req, responseId, contentCrawlerKey);
     } else {
-        await createAndStartSearchCrawler(searchCrawlerOptions);
         // If input is a search query, run the search crawler first
-        await addSearchRequest(req, searchCrawlerOptions);
+        const { key: searchCrawlerKey } = await createAndStartSearchCrawler(searchCrawlerOptions);
+        await addSearchRequest(req, searchCrawlerKey);
     }
 
     // Return promise that resolves when all requests are processed
@@ -151,25 +165,12 @@ export async function handleSearchRequest(request: IncomingMessage, response: Se
         response.end(JSON.stringify(results));
     } catch (e) {
         const error = e as Error;
-        const statusCode = error instanceof UserInputError ? 400 : 500;
+        let statusCode = 500;
+        if (error instanceof UserInputError) statusCode = 400;
+        else if (error instanceof RunShuttingDownError) statusCode = 503;
         log.error(`Error occurred: ${error.message}`);
         response.writeHead(statusCode, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ errorMessage: error.message }));
-    }
-}
-
-/**
- * Handles the model context protocol scenario (non-HTTP scenario).
- * Uses the same runSearchProcess function but just returns the results as a promise.
- */
-export async function handleModelContextProtocol(params: Partial<Input>, actorRequestId?: string): Promise<Output[]> {
-    try {
-        log.info(`Received parameters: ${JSON.stringify(params)}`);
-        return await runSearchProcess(params, actorRequestId);
-    } catch (e) {
-        const error = e as Error;
-        log.error(`UserInputError occurred: ${error.message}`);
-        return [{ text: error.message }] as Output[];
     }
 }
 
@@ -193,7 +194,6 @@ export async function handleSearchNormalMode(
 
     const { req, isUrl } = prepareRequest(
         input,
-        searchCrawlerOptions,
         contentCrawlerKey,
         contentScraperSettings,
     );
@@ -205,15 +205,15 @@ export async function handleSearchNormalMode(
         }
         await addContentCrawlRequest(req, '', contentCrawlerKey);
     } else {
-        const { crawler: searchCrawler } = await createAndStartSearchCrawler(searchCrawlerOptions, false);
-        await addSearchRequest(req, searchCrawlerOptions);
+        const { crawler: searchCrawler, key: searchCrawlerKey } = await createAndStartSearchCrawler(searchCrawlerOptions, false);
+        await addSearchRequest(req, searchCrawlerKey);
         addTimeMeasureEvent(req.userData!, 'before-cheerio-run', startedTime);
-        log.info(`Running Google Search crawler with request: ${JSON.stringify(req)}`);
+        log.info(`Running Google Search crawler with request: ${req.url}`);
         await searchCrawler!.run();
     }
 
     addTimeMeasureEvent(req.userData!, 'before-playwright-run', startedTime);
-    log.info(`Running target page crawler with request: ${JSON.stringify(req)}`);
+    log.info(`Running target page crawler with request: ${req.url}`);
     await contentCrawler!.run();
     /* eslint-enable no-param-reassign */
 

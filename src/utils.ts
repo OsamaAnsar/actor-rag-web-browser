@@ -2,7 +2,7 @@ import type { IncomingHttpHeaders } from 'node:http';
 import { parse } from 'node:querystring';
 
 import { Actor } from 'apify';
-import type { ProxyConfiguration, RequestOptions } from 'crawlee';
+import type { RequestOptions } from 'crawlee';
 import { log } from 'crawlee';
 
 import ragWebBrowserInputSchema from '../actors/apify_rag-web-browser/.actor/input_schema.json' with { type: 'json' };
@@ -14,6 +14,7 @@ import type {
     CreateSearchRequestUserData,
     Input,
     OrganicResult, OutputFormats,
+    ProxyOptions,
     SearchCrawlerUserData,
     TimeMeasure,
 } from './types.js';
@@ -144,7 +145,6 @@ export function randomId() {
  */
 export function createSearchRequest(
     userData: CreateSearchRequestUserData,
-    proxyConfiguration: ProxyConfiguration | undefined,
     startOffset = 0,
 ): RequestOptions<SearchCrawlerUserData> {
     // Initialize or update pagination fields
@@ -152,9 +152,7 @@ export function createSearchRequest(
     const currentPage = userData.currentPage ?? 0;
     const totalPages = userData.totalPages ?? Math.ceil(userData.maxResults / 10) + 1;
 
-    // @ts-expect-error is there a better way to get group information?
-    // (e.g. to  create extended CheerioCrawlOptions and pass it there?)
-    const groups = proxyConfiguration?.groups || [];
+    const groups = userData.proxyOptions.groups ?? [];
     const protocol = groups.includes('GOOGLE_SERP') ? 'http' : 'https';
     const urlSearch = startOffset > 0
         ? `${protocol}://www.google.com/search?q=${encodeURI(userData.query)}&start=${startOffset}`
@@ -162,12 +160,17 @@ export function createSearchRequest(
     return {
         url: urlSearch,
         uniqueKey: randomId(),
+        // The shared crawler cannot hold this caller's retry count, so the request does.
+        maxRetries: userData.serpMaxRetries,
         userData: {
             maxResults: userData.maxResults,
             timeMeasures: userData.timeMeasures || [],
             query: userData.query,
             contentCrawlerKey: userData.contentCrawlerKey,
             contentScraperSettings: userData.contentScraperSettings,
+            serpMaxRetries: userData.serpMaxRetries,
+            proxyOptions: userData.proxyOptions,
+            contentProxyOptions: userData.contentProxyOptions,
             responseId: userData.responseId,
             collectedResults,
             currentPage,
@@ -186,12 +189,14 @@ export function createRequest(
     result: OrganicResult,
     responseId: string,
     contentScraperSettings: ContentScraperSettings,
+    proxyOptions: ProxyOptions,
     timeMeasures: TimeMeasure[] | null = null,
     actorRequestId?: string,
 ): RequestOptions<ContentCrawlerUserData> {
     return {
         url: result.url!,
         uniqueKey: randomId(),
+        maxRetries: contentScraperSettings.maxRequestRetries,
         // Media files contain no text to extract, so don't spend any bandwidth on downloading them.
         skipNavigation: isMediaUrl(result.url!),
         userData: {
@@ -200,6 +205,7 @@ export function createRequest(
             searchResult: result.url && result.title ? result : undefined,
             timeMeasures: timeMeasures ? [...timeMeasures] : [],
             contentScraperSettings,
+            proxyOptions,
             actorRequestId,
         },
     };

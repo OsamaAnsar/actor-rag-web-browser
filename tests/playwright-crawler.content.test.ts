@@ -72,8 +72,10 @@ describe('Playwright Crawler Content Tests', () => {
                 outputFormats: ['text'],
                 maxHtmlCharsToProcess: 100000,
                 dynamicContentWaitSecs: 20,
+                maxRequestRetries: 1,
                 ...settings,
             },
+            { useApifyProxy: false },
             [],
         );
 

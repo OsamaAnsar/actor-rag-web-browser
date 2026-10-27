@@ -71,7 +71,9 @@ describe('Cheerio Crawler Content Tests', () => {
                 outputFormats: ['text'],
                 maxHtmlCharsToProcess: 100000,
                 dynamicContentWaitSecs: 20,
+                maxRequestRetries: 1,
             },
+            { useApifyProxy: false },
             [],
         );
 
